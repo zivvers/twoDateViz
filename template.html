@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html class='test'>
+    <head>
+        <meta charset="utf-8">
+        <title>Point on a map D3</title>
+        <script src="/socket.io/socket.io.js"></script>
+        <script src="http://d3js.org/d3.v4.min.js"></script>
+        <script src="http://d3js.org/topojson.v2.min.js"></script>
+        <script src="https://unpkg.com/d3-composite-projections@1.2.0"></script>
+        <style type="text/css">
+
+            #wrapper {
+                text-align:center
+            }
+
+            .feature {
+                fill: none;
+                stroke: grey;
+                stroke-width: 1px;
+                stroke-linejoin: round;
+            }
+
+            .input-container {
+                display: inline-block;
+                vertical-align: top;
+                margin-right: 10px;
+                margin-left: 10px;
+                width: 200px;
+                height: 100px;
+            }
+
+             .mesh {
+                fill: none;
+                stroke: lightgrey;
+                stroke-width: 2px;
+                stroke-linejoin: round;
+            }
+            
+            h1 {
+                font-family: sans-serif;
+            }
+</style>
+</head>
+<body>
+<div id="wrapper">
+    <div id="date-input">
+        <div class="input-container">
+            Start Date <br>
+            <input type="date" id="start-date">
+            <br>
+            <span><p></span>
+        </div>
+        <div class="input-container">
+            End Date <br>
+            <input type="date" id="end-date">
+            <br>
+            <span><p></span>
+        </div>
+        <div class="input-container">
+            <br>
+            <button type="button">Submit</button>
+            <br>
+            <span><p></span>
+        </div>
+    </div>
+    <div id="svg-container">
+    </div>
+</div>
+<script type="text/javascript">
+
+    // unfortunately have to copy projection/path code from our server side rendering
+    var projection = d3.geoAlbersUsaTerritories()
+                        .scale( 1150 )
+                        .translate([550, 275]); 
+
+    var path = d3.geoPath()
+        .projection(projection);        
+
+    var width = d3.select("svg").attr("width")
+        , height = d3.select("svg").attr("height");
+
+    var voronoi = d3.voronoi()
+        .x( function(d) { return +d.coords[0]; } )
+        .y( function(d) { return +d.coords[1]; } )
+        .extent([   [-1, -1],
+                    [width + 1, height + 1]
+                            ]);
+
+    // we rendered this server side
+    var g = d3.select("g");
+
+
+    var colorScale = d3.scaleLinear()
+                    .range(["#27D32F","#FFFF00", "#FFA500", "#D73027", "#9400D3"])
+                    .interpolate( d3.interpolateHcl );
+
+    // render voronoi polygons for each json object streamed from server
+    function renderPrecipDat( data ) {    
+        
+        console.log(data);
+        var precipDat = [];
+
+        data.forEach( function(d) {
+            precipDat.push(
+                {   coop : d.coop
+                    , datetime_utc : d.datetime_utc
+                    , coords : projection([+d.lon, +d.lat])
+                    , precip_amt : +d.precip_amt
+                    , station_name : d.station_name
+                }
+
+            );
+        });
+
+
+        console.log(data);
+        
+        var t = d3.transition()
+            .duration(750);
+        
+        // JOIN
+        var voronoiGroup = g.selectAll(".voronoi")  
+                            .data( voronoi.polygons( precipDat ));
+
+        var stations = g.selectAll(".station")
+                        .data( precipDat );
+
+        // EXIT
+        voronoiGroup.exit()
+            .style("fill", "gainsboro")
+            .transition(t)
+            .style("opacity", 1e-6)
+            .remove();
+
+        stations.exit()
+            .transition(t)
+            .style("opacity", 1e-6)
+            .remove();
+
+        // UPDATE
+        voronoiGroup
+            .transition(t)
+            .delay(250)
+            .attr("d", function(d) { return d ? "M" + d.join("L") + "Z" : null; } )
+            .style("fill", "#C0C0C0");
+      
+       stations
+            .transition(t)
+            .delay(250)
+            .attr("cx", function(d) { return d.coords[0]; })
+            .attr("cy", function(d) { return d.coords[1]; })
+            .attr("r", 2)
+            .attr("stroke", "black");
+
+        // ENTER
+        voronoiGroup.enter().append("path")
+            .attr("class", "voronoi")
+            .attr("d", function(d) { return d ? "M" + d.join("L") + "Z" : null; })
+            //.style("fill", function(d) { return "blue"; })
+            .style("fill", "blue")
+            .style("opacity", 1e-6)
+          .transition(t)
+            .delay(250)
+            .style("opacity", 1);
+        
+        stations.enter().append("circle")
+            .attr("class", "station")
+            .attr("cx", function(d) {  return d.coords[0]; })
+            .attr("cy", function(d) {  return d.coords[1]; })
+              .style("opacity", 1e-6)
+            .transition(t)
+              .delay(250)
+              .style("opacity", 1);
+    }
+
+    var socket = io();
+    socket.on("streamData", function(data) { console.log("data time!"); renderPrecipDat( data ); } );
+
+    // minimum date is 2012-01-01
+    var minDate = new Date(2012, 00, 01);
+    // maximum date is 2014-12-31
+    var maxDate = new Date(2015, 00, 00);
+
+    d3.selectAll('.input-container')
+            .select('input')
+            .on('input', function() { console.log('inputted'); 
+                                               valiDate( this );} );
+    
+    d3.select("button")
+        .on("click", function() { console.log("clicked");
+                                    submitDates( this );} );
+    
+    function submitDates( elem ) {
+
+        console.log("in function");
+        var startInput = d3.select("input#start-date"),
+            endInput = d3.select("input#end-date");
+
+        var infoText = "";
+        var spanCol = "black";
+
+        if ((startInput.attr("class") != "valid") || (endInput.attr("class") != "valid")) {
+            console.log("invalid dates");    
+            infoText = "Invalid date(s) inputted";
+            spanCol = "red";    
+
+        } else {
+            socket.emit("date submit", { start : startInput.property("value"), end : endInput.property("value") });
+
+        }
+             d3.select(elem.parentNode)
+                        .select("p")
+                        .transition()
+                        .duration(1000)
+                        .on("start", function () {
+                            var t = d3.active(this)
+                                .style("opacity", 0)
+                                ;
+                            
+                            d3.select(this)
+                                .style("opacity", 0)
+                                .text(infoText)
+                                .transition(t)
+                                .style("opacity", 1)
+                                .style("color", spanCol);
+                            
+                            });
+    }        
+        
+        
+        
+    function valiDate(elem) {
+    
+        var input = d3.select(elem).property("value");
+
+        console.log( input );
+        var inputDateSplit = input.split("-");
+        var inputDate = new Date(+inputDateSplit[0], +inputDateSplit[1] - 1,  +inputDateSplit[2], 0, 0);
+        console.log(inputDate);
+        var infoText;        
+        var inputClass = "invalid";
+        
+        if ((inputDate < minDate) || (inputDate > maxDate)) {
+
+            console.log("date not in range!");
+            infoText = "Date not in range of " + minDate.toLocaleDateString("en-US") + " to " + maxDate.toLocaleDateString("en-US");
+            spanCol = "red";
+        
+        } else if (input != "") {
+
+            infoText = "Valid date";
+            spanCol = "green";
+            inputClass = "valid";
+        }
+        // if empty string input value
+        else {
+
+            infoText = " ";
+            spanCol = "black";
+        
+        }
+            // .toLocaleDateString("en-US")
+            d3.select(elem.parentNode)
+                        .select("p")
+                        .transition()
+                        .duration(1000)
+                        .on("start", function () {
+                            var t = d3.active(this)
+                                .style("opacity", 0)
+                                //.remove()
+                                ;
+                            
+                            d3.select(this)
+                                .style("opacity", 0)
+                                .text(infoText)
+                                .transition(t)
+                                .style("opacity", 1)
+                                .style("color", spanCol);
+                            
+                            d3.select( elem )
+                                .attr("class", inputClass);
+                        });
+       
+    }
+
+
+</script>
+</body>
